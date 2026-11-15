@@ -1,5 +1,4 @@
-// tb/：独立测试入口，依赖预编译 host_mem_pkg 与 UVM；测试自行创建和释放使用的 manager。
-// 通过 import 使用包内唯一类定义，宏通过头文件显式引入，不将测试或局部类纳入生产包。
+// host_mem_manager 定向测试：分配/释放、读写、release_range、错误检测及 buddy/linear 压力用例。
 `ifndef HOST_MEM_TB_SV
 `define HOST_MEM_TB_SV
 
@@ -11,7 +10,6 @@ program host_mem_tb;
     import uvm_pkg::*;
     import host_mem_pkg::*;
 
-    // UVM report catcher to capture expected FATAL/ERROR messages
     class expected_msg_catcher extends uvm_report_catcher;
         string expected_id;
         bit    caught;
@@ -30,7 +28,6 @@ program host_mem_tb;
         endfunction
     endclass
 
-    // All variable declarations at module level
     host_mem_manager mem;
     bit [63:0] addr1, addr2, addr3;
     byte wdata[], rdata[];
@@ -102,7 +99,7 @@ program host_mem_tb;
     // Test 18 variables - linear mode small CPU memory
     host_mem_manager lin_mem;
     bit [63:0] lin_addrs[4];
-    int unsigned lin_sizes[4] = '{100, 200, 1000, 17000};  // odd sizes - buddy would round to 128/256/1024/32768
+    int unsigned lin_sizes[4] = '{100, 200, 1000, 17000};  // pow2-unfriendly sizes
     int unsigned lin_total_occ;
     bit [63:0] lin_big;
     byte lin_wd[], lin_rd[];
@@ -161,9 +158,6 @@ program host_mem_tb;
 
     initial begin
 
-        // ========================================
-        // Test 1: Basic init and alloc
-        // ========================================
         $display("\n=== Test 1: Basic init and alloc ===");
         mem = new("mem0");
         mem.init_region(64'h0, 64'hFFFF);  // 64KB
@@ -173,9 +167,6 @@ program host_mem_tb;
         assert((addr1 % 64) == 0) else $fatal(1, "alignment check failed");
         $display("Test 1 PASSED: alloc returned 0x%016h", addr1);
 
-        // ========================================
-        // Test 2: Write and read back
-        // ========================================
         $display("\n=== Test 2: Write and read back ===");
         wdata = new[100];
         foreach (wdata[i]) wdata[i] = i;
@@ -186,9 +177,6 @@ program host_mem_tb;
             assert(rdata[i] == wdata[i]) else $fatal(1, $sformatf("data mismatch at %0d", i));
         $display("Test 2 PASSED: write/read 100 bytes OK");
 
-        // ========================================
-        // Test 3: Multiple allocations, no overlap
-        // ========================================
         $display("\n=== Test 3: Multiple allocations ===");
         `host_mem_alloc(mem, addr2, 200, 128);
         `host_mem_alloc(mem, addr3, 4, 4);
@@ -197,9 +185,6 @@ program host_mem_tb;
             else $fatal(1, "allocations overlap!");
         $display("Test 3 PASSED: addr2=0x%016h addr3=0x%016h", addr2, addr3);
 
-        // ========================================
-        // Test 4: Free and re-alloc (buddy merge)
-        // ========================================
         $display("\n=== Test 4: Free and re-alloc ===");
         `host_mem_free(mem, addr1);
         `host_mem_free(mem, addr2);
@@ -209,9 +194,6 @@ program host_mem_tb;
         `host_mem_free(mem, addr1);
         $display("Test 4 PASSED: free+merge+realloc OK");
 
-        // ========================================
-        // Test 5: memset, memcpy, compare
-        // ========================================
         $display("\n=== Test 5: Bulk operations ===");
         `host_mem_alloc(mem, addr1, 256);
         `host_mem_alloc(mem, addr2, 256);
@@ -231,9 +213,6 @@ program host_mem_tb;
         `host_mem_free(mem, addr1);
         `host_mem_free(mem, addr2);
 
-        // ========================================
-        // Test 6: release_range partial free
-        // ========================================
         $display("\n=== Test 6: release_range ===");
         `host_mem_alloc(mem, addr1, 256);
         wdata = new[256];
@@ -257,9 +236,6 @@ program host_mem_tb;
         `host_mem_release_range(mem, addr1 + 128, 128);
         $display("Test 6 PASSED: release_range OK");
 
-        // ========================================
-        // Test 7: Debug output
-        // ========================================
         $display("\n=== Test 7: Debug output ===");
         `host_mem_alloc(mem, addr1, 128);
         wdata = new[128];
@@ -271,18 +247,12 @@ program host_mem_tb;
         mem.print_stats();
         mem.print_history(5);
 
-        // ========================================
-        // Test 8: Leak check
-        // ========================================
         $display("\n=== Test 8: Leak check ===");
         `host_mem_leak_check(mem);
 
         `host_mem_free(mem, addr1);
         `host_mem_leak_check(mem);
 
-        // ========================================
-        // Test 9: Double-free detection
-        // ========================================
         $display("\n=== Test 9: Double-free detection ===");
         `host_mem_alloc(mem, addr1, 64);
         `host_mem_free(mem, addr1);
@@ -295,9 +265,6 @@ program host_mem_tb;
         uvm_report_cb::delete(null, catcher);
         $display("Test 9 PASSED: double-free detected");
 
-        // ========================================
-        // Test 10: Unallocated access detection
-        // ========================================
         $display("\n=== Test 10: Unallocated access ===");
         catcher = new("catcher10");
         catcher.expected_id = "HOST_MEM";
@@ -307,9 +274,6 @@ program host_mem_tb;
         uvm_report_cb::delete(null, catcher);
         $display("Test 10 PASSED: unallocated access detected");
 
-        // ========================================
-        // Test 11: Large-scale allocation stress test
-        // ========================================
         $display("\n=== Test 11: Large-scale allocation stress (1MB region, 256 random allocs) ===");
 
         big_mem = new("big_mem");
@@ -366,9 +330,6 @@ program host_mem_tb;
         big_mem.print_stats();
         $display("Test 11 PASSED: large-scale alloc stress OK");
 
-        // ========================================
-        // Test 12: Alloc-free-realloc cycle stress (fragmentation + merge)
-        // ========================================
         $display("\n=== Test 12: Alloc-free-realloc cycle (fragmentation + buddy merge) ===");
 
         cycle_mem = new("cycle_mem");
@@ -403,21 +364,16 @@ program host_mem_tb;
         `host_mem_leak_check(cycle_mem);
         $display("Test 12 PASSED: 5 alloc-free cycles with full merge recovery");
 
-        // ========================================
-        // Test 13: Large-scale release_range (DMA batch scenario)
-        // ========================================
         $display("\n=== Test 13: Large-scale release_range (DMA batch) ===");
 
         dma_mem = new("dma_mem");
         dma_mem.init_region(64'h0, 64'hF_FFFF);  // 1MB
 
-        chunk_size = 64;  // MIN_BLOCK_SIZE
+        chunk_size = 64;
 
-        // Allocate a 16KB block for DMA
         `host_mem_alloc(dma_mem, dma_addr, 16384, 4096);
         assert(dma_addr != '1) else $fatal(1, "DMA alloc failed");
 
-        // Write data to entire block
         wd = new[16384];
         foreach (wd[i]) wd[i] = i & 8'hFF;
         `host_mem_write(dma_mem, dma_addr, wd);
@@ -444,9 +400,6 @@ program host_mem_tb;
         `host_mem_leak_check(dma_mem);
         $display("Test 13 PASSED: DMA batch release_range with auto-free OK");
 
-        // ========================================
-        // Test 14: Multi-region large allocation
-        // ========================================
         $display("\n=== Test 14: Multi-region large allocation ===");
 
         mr_mem = new("mr_mem");
@@ -459,7 +412,6 @@ program host_mem_tb;
         assert(a1 >= 64'h0000_0000 && a1 < 64'h0010_0000)
             else $fatal(1, $sformatf("Expected alloc in region 0, got 0x%h", a1));
 
-        // Alloc 64KB
         `host_mem_alloc(mr_mem, a2, 65536);    // 64KB
         assert(a2 != '1) else $fatal(1, "64KB alloc failed");
 
@@ -481,9 +433,6 @@ program host_mem_tb;
         mr_mem.print_stats();
         $display("Test 14 PASSED: multi-region large allocation OK");
 
-        // ========================================
-        // Test 15: Rapid alloc-free thrashing (same size)
-        // ========================================
         $display("\n=== Test 15: Rapid alloc-free thrashing (1000 iterations) ===");
 
         thrash_mem = new("thrash_mem");
@@ -503,9 +452,6 @@ program host_mem_tb;
         `host_mem_leak_check(thrash_mem);
         $display("Test 15 PASSED: 1000 alloc-free thrash cycles OK");
 
-        // ========================================
-        // Test 16: Variable-size random alloc-free mix
-        // ========================================
         $display("\n=== Test 16: Random alloc-free mix (500 ops) ===");
 
         rand_mem = new("rand_mem");
@@ -525,7 +471,6 @@ program host_mem_tb;
                 if (a != '1) begin
                     pool.push_back(a);
                     pool_sizes[a] = sz;
-                    // Write pattern
                     wd = new[sz];
                     foreach (wd[i]) wd[i] = (a + i) & 8'hFF;
                     `host_mem_write(rand_mem, a, wd);
@@ -549,7 +494,6 @@ program host_mem_tb;
         $display("  Performed %0d allocs, %0d frees, %0d blocks still live",
             alloc_ops, free_ops, pool.size());
 
-        // Free remaining
         foreach (pool[i])
             `host_mem_free(rand_mem, pool[i]);
 
@@ -557,9 +501,6 @@ program host_mem_tb;
         rand_mem.print_stats();
         $display("Test 16 PASSED: random alloc-free mix OK");
 
-        // ========================================
-        // Test 17: 10K+ stress test with duplicate address detection
-        // ========================================
         $display("\n=== Test 17: 10K+ alloc/write/read/free stress with dup-addr detection ===");
 
         stress_mem = new("stress_mem");
@@ -577,11 +518,7 @@ program host_mem_tb;
         for (op_iter = 0; op_iter < int'(stress_total_ops); op_iter++) begin
             stress_r = $urandom(stress_seed) % 100;
 
-            // Dynamic bias based on pool size:
-            //   pool=0       -> always alloc
-            //   pool<200     -> 80% alloc
-            //   pool 200~800 -> 50/50
-            //   pool>800     -> 80% free
+            // Bias by pool size: empty -> alloc; <200 -> 80% alloc; 200..800 -> 50/50; >800 -> 80% free.
             if (stress_pool.size() == 0) begin
                 stress_r = 0;  // force alloc
             end else if (stress_pool.size() < 200) begin
@@ -591,7 +528,7 @@ program host_mem_tb;
             end
 
             if (stress_r < 50) begin
-                // === ALLOC ===
+                // Alloc
                 stress_sz = (($urandom(stress_seed) % 2044) + 4);  // 4 ~ 2048 bytes
                 stress_al = 1 << ($urandom(stress_seed) % 7);      // 1,2,4,...,64
                 stress_tag = $urandom(stress_seed) & 8'hFF;
@@ -599,7 +536,6 @@ program host_mem_tb;
                 `host_mem_alloc(stress_mem, stress_addr, stress_sz, stress_al);
 
                 if (stress_addr != '1) begin
-                    // *** DUPLICATE ADDRESS CHECK ***
                     if (stress_live_set.exists(stress_addr)) begin
                         $display("ERROR: DUPLICATE ADDR DETECTED! addr=0x%016h at op %0d (already live)", stress_addr, op_iter);
                         stress_dup_detected++;
@@ -608,7 +544,6 @@ program host_mem_tb;
                     // Also check overlap with all live blocks
                     foreach (stress_live_set[k]) begin
                         if (k == stress_addr) continue;
-                        // Check [stress_addr, stress_addr+stress_sz) vs [k, k+stress_pool_sizes[k])
                         if (!(stress_addr + stress_sz <= k || k + stress_pool_sizes[k] <= stress_addr)) begin
                             $display("ERROR: OVERLAP! new=[0x%h +%0d] vs existing=[0x%h +%0d] at op %0d",
                                 stress_addr, stress_sz, k, stress_pool_sizes[k], op_iter);
@@ -631,13 +566,12 @@ program host_mem_tb;
                     stress_alloc_fail++;
                 end
             end else begin
-                // === FREE with data verify ===
+                // Free with data verify
                 stress_idx = $urandom(stress_seed) % stress_pool.size();
                 stress_fa = stress_pool[stress_idx];
                 stress_sz = stress_pool_sizes[stress_fa];
                 stress_tag = stress_pool_tags[stress_fa];
 
-                // Read back and verify data integrity
                 `host_mem_read(stress_mem, stress_fa, stress_sz, rd);
                 foreach (rd[b]) begin
                     if (rd[b] != byte'(stress_tag ^ (b & 8'hFF))) begin
@@ -657,7 +591,6 @@ program host_mem_tb;
                 stress_free_ok++;
             end
 
-            // Progress report every 5000 ops
             if ((op_iter + 1) % 5000 == 0)
                 $display("  ... %0d / %0d ops done (live=%0d, alloc_ok=%0d, alloc_fail=%0d, free=%0d, dup=%0d, data_err=%0d)",
                     op_iter + 1, stress_total_ops, stress_pool.size(),
@@ -665,7 +598,6 @@ program host_mem_tb;
                     stress_dup_detected, stress_data_err);
         end
 
-        // Final: verify all remaining live blocks
         $display("  Final verify: checking %0d remaining live blocks...", stress_pool.size());
         foreach (stress_pool[p]) begin
             stress_fa = stress_pool[p];
@@ -681,7 +613,6 @@ program host_mem_tb;
             end
         end
 
-        // Free all remaining
         foreach (stress_pool[p])
             `host_mem_free(stress_mem, stress_pool[p]);
 
@@ -705,9 +636,6 @@ program host_mem_tb;
                 stress_alloc_ok, stress_free_ok);
         end
 
-        // ========================================
-        // Test 18: Linear mode - small CPU memory (32KB), pow2-unfriendly sizes
-        // ========================================
         $display("\n=== Test 18: Linear mode - small 32KB CPU memory ===");
 
         lin_mem = new("lin_mem");
@@ -728,7 +656,6 @@ program host_mem_tb;
         $display("  Total occupation: %0d bytes (vs 32KB region)", lin_total_occ);
         assert(lin_total_occ <= 32768) else $fatal(1, "Linear over-occupied");
 
-        // Write/read verify across all blocks
         for (i_iter = 0; i_iter < 4; i_iter++) begin
             lin_wd = new[lin_sizes[i_iter]];
             foreach (lin_wd[b]) lin_wd[b] = (i_iter * 13 + b) & 8'hFF;
@@ -742,7 +669,6 @@ program host_mem_tb;
         end
         $display("  Write/read verify OK for all 4 blocks");
 
-        // Verify no overlap between blocks
         for (i_iter = 0; i_iter < 4; i_iter++) begin
             for (j_iter = i_iter + 1; j_iter < 4; j_iter++) begin
                 assert(lin_addrs[i_iter] + lin_sizes[i_iter] <= lin_addrs[j_iter] ||
@@ -752,7 +678,6 @@ program host_mem_tb;
         end
         $display("  No overlap detected");
 
-        // Free all
         for (i_iter = 0; i_iter < 4; i_iter++)
             `host_mem_free(lin_mem, lin_addrs[i_iter]);
 
@@ -765,15 +690,11 @@ program host_mem_tb;
         lin_mem.print_stats();
         $display("Test 18 PASSED: linear mode small CPU memory (4 blocks, %0d B total) fit in 32KB", lin_total_occ);
 
-        // ========================================
-        // Test 19: Linear mode - arbitrary-order free + merge
-        // ========================================
         $display("\n=== Test 19: Linear mode - out-of-order free + merge ===");
 
         lin2_mem = new("lin2_mem");
         lin2_mem.init_region(64'h0, 64'hFFFFF, MODE_LINEAR);  // 1MB
 
-        // Allocate 8 blocks of 4KB each
         for (i_iter = 0; i_iter < 8; i_iter++) begin
             `host_mem_alloc(lin2_mem, lin2_addrs[i_iter], 4096, 64);
             assert(lin2_addrs[i_iter] != '1) else $fatal(1, "Linear 4KB alloc failed");
@@ -789,8 +710,7 @@ program host_mem_tb;
         `host_mem_free(lin2_mem, lin2_addrs[2]);
         `host_mem_free(lin2_mem, lin2_addrs[6]);
 
-        // After all free + merge, full region should be one segment again
-        // Alloc near-full to verify
+        // After all frees the region should merge back into one segment: alloc near-full to verify.
         `host_mem_alloc(lin2_mem, lin2_after, 1048576 - 4096, 64);
         assert(lin2_after != '1)
             else $fatal(1, "Linear merge broken: cannot reclaim full region after out-of-order free");
@@ -799,9 +719,6 @@ program host_mem_tb;
         `host_mem_leak_check(lin2_mem);
         $display("Test 19 PASSED: linear out-of-order free + merge OK");
 
-        // ========================================
-        // Test 20: Linear mode 15K random stress (dup-addr + data corruption)
-        // ========================================
         $display("\n=== Test 20: Linear mode 15K random stress ===");
 
         lstr_mem = new("lstr_mem");
@@ -828,7 +745,7 @@ program host_mem_tb;
             end
 
             if (lstr_r < 50) begin
-                // ALLOC: real size 4..2048, align 1..128 (linear enforces >=64)
+                // ALLOC: real size 4..2048, align 1..128 (linear enforces >= min_granule)
                 lstr_sz = (($urandom(lstr_seed) % 2044) + 4);
                 lstr_al = 1 << ($urandom(lstr_seed) % 8);
                 lstr_tag = $urandom(lstr_seed) & 8'hFF;
@@ -836,12 +753,10 @@ program host_mem_tb;
                 `host_mem_alloc(lstr_mem, lstr_addr, lstr_sz, lstr_al);
 
                 if (lstr_addr != '1) begin
-                    // Duplicate detection
                     if (lstr_live_set.exists(lstr_addr)) begin
                         $display("LINEAR DUP! addr=0x%016h op=%0d", lstr_addr, op_iter);
                         lstr_dup_detected++;
                     end
-                    // Overlap detection
                     foreach (lstr_live_set[k]) begin
                         if (k == lstr_addr) continue;
                         if (!(lstr_addr + lstr_sz <= k || k + lstr_pool_sizes[k] <= lstr_addr)) begin
@@ -896,7 +811,6 @@ program host_mem_tb;
                     lstr_dup_detected, lstr_data_err);
         end
 
-        // Final verify
         foreach (lstr_pool[p]) begin
             lstr_fa = lstr_pool[p];
             lstr_sz = lstr_pool_sizes[lstr_fa];
@@ -922,9 +836,6 @@ program host_mem_tb;
             $fatal(1, "Test 20 FAILED");
         $display("Test 20 PASSED: linear 15K random stress OK");
 
-        // ========================================
-        // Test 21: Buddy random mixed alloc/free/release_range
-        // ========================================
         $display("\n=== Test 21: Buddy random alloc/free/release_range (3K ops) ===");
 
         bm_mem = new("bm_mem");
@@ -988,8 +899,8 @@ program host_mem_tb;
                 bm_fa = bm_pool[bm_idx];
                 bm_sz = bm_pool_sizes[bm_fa];
 
-                // Skip if buddy_size==64 (release_range covers all => auto-free,
-                // then explicit free would be double-free). Need buddy_size>=128 i.e. req_size>64.
+                // buddy_size == 64 would let release_range auto-free the block and make the later free()
+                // a double-free, so only blocks with req_size > 64 are used.
                 if (bm_sz > 64) begin
                     `host_mem_release_range(bm_mem, bm_fa, 64);
                     `host_mem_free(bm_mem, bm_fa);
@@ -1017,9 +928,6 @@ program host_mem_tb;
         if (bm_data_err > 0) $fatal(1, "Test 21 FAILED");
         $display("Test 21 PASSED: buddy random alloc/free/release_range OK");
 
-        // ========================================
-        // Test 22: Linear fragmentation + merge stress
-        // ========================================
         $display("\n=== Test 22: Linear fragmentation/merge stress (200 blocks) ===");
 
         lf_mem = new("lf_mem");
@@ -1036,7 +944,6 @@ program host_mem_tb;
             if (lf_addrs[i_iter] != '1) begin
                 lf_alive[i_iter] = 1;
                 lf_alive_count++;
-                // tag = i_iter
                 wd = new[lf_sizes[i_iter]];
                 foreach (wd[b]) wd[b] = (i_iter + b) & 8'hFF;
                 `host_mem_write(lf_mem, lf_addrs[i_iter], wd);
@@ -1088,9 +995,6 @@ program host_mem_tb;
         lf_mem.print_stats();
         $display("Test 22 PASSED: linear fragmentation/merge stress OK");
 
-        // ========================================
-        // Test 23: Granule comparison - 16B-heavy workload on 4/16/64 configs
-        // ========================================
         $display("\n=== Test 23: Granule comparison (16B workload, 4/16/64 granule) ===");
 
         for (g_idx = 0; g_idx < 3; g_idx++) begin
@@ -1098,11 +1002,9 @@ program host_mem_tb;
             g_mem[g_idx].init_region(64'h0, 64'hF_FFFF, MODE_LINEAR, g_granules[g_idx]);
 
             g_eff_granule = g_mem[g_idx].get_min_granule();
-            // For 16B alloc, occ = ceil(16/granule)*granule
             g_per_block_occ = ((16 + g_eff_granule - 1) / g_eff_granule) * g_eff_granule;
             g_total_occ = 0;
 
-            // Alloc 500 x 16B blocks
             for (i_iter = 0; i_iter < 500; i_iter++) begin
                 `host_mem_alloc(g_mem[g_idx], g_addrs[i_iter], 16, 1);
                 assert(g_addrs[i_iter] != '1)
@@ -1110,7 +1012,6 @@ program host_mem_tb;
                 g_total_occ += g_per_block_occ;
             end
 
-            // Write/read verify a sample
             wd = new[16];
             foreach (wd[b]) wd[b] = 8'h5A;
             `host_mem_write(g_mem[g_idx], g_addrs[0], wd);
@@ -1121,7 +1022,6 @@ program host_mem_tb;
             $display("  granule=%0d: 500x16B blocks, per-block occ=%0d, total=%0d bytes (1MB region)",
                 g_eff_granule, g_per_block_occ, g_total_occ);
 
-            // Free all
             for (i_iter = 0; i_iter < 500; i_iter++)
                 `host_mem_free(g_mem[g_idx], g_addrs[i_iter]);
 
@@ -1136,7 +1036,6 @@ program host_mem_tb;
         end
         $display("Test 23 PASSED: 3 granule configs (4/16/64) all functional");
 
-        // ========================================
         $display("\n========================================");
         $display("ALL TESTS PASSED");
         $display("========================================\n");

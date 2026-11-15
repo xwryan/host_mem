@@ -1,12 +1,9 @@
-// src/：Host 到 manager 的所有权映射，仅由 host_mem_pkg.sv 在 manager 之后包含。
-// 依赖包内 host_mem_manager、分配策略类型和 UVM；禁止单独编译或跨作用域 include。
-// pool 创建并持有每个 Host 的唯一 manager；get_host 返回共享句柄，不转移所有权。
+// Host 到 manager 的所有权映射；仅由 host_mem_pkg.sv 在 manager 之后包含。
 `ifndef HOST_MEM_POOL_SV
 `define HOST_MEM_POOL_SV
 
-// Host-scoped ownership of memory managers.  The pool deliberately returns
-// the same concrete handle for repeated lookups; service environments must
-// share this object rather than silently constructing private allocators.
+// Host-scoped owner of managers: repeated lookups return the same handle, and service
+// environments must share it rather than construct private allocators.
 class host_mem_pool extends uvm_object;
     `uvm_object_utils(host_mem_pool)
 
@@ -16,10 +13,8 @@ class host_mem_pool extends uvm_object;
         super.new(name);
     endfunction
 
-    // Mirror the allocator's representability checks before constructing a
-    // manager.  init_region() intentionally keeps a void return type for
-    // compatibility, so the pool must not publish an object when that call
-    // would reject the aperture.
+    // Mirror the allocator's representability checks before constructing a manager:
+    // init_region() returns void, so the pool must not publish one that would be rejected.
     protected function bit valid_region(
         input bit [63:0] base_addr,
         input bit [63:0] end_addr,

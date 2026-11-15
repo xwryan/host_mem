@@ -1,21 +1,8 @@
-// src/：调用端便捷宏；宏不属于 package 命名空间，独立编译的调用端需显式包含本头文件。
-// 依赖调用者传入有效 manager 句柄；仅转发操作及源码位置，不创建或持有内存对象。
+// 调用端便捷宏：宏不属于 package 命名空间，独立编译的调用端需显式 include 本文件。
 `ifndef HOST_MEM_MACROS_SVH
 `define HOST_MEM_MACROS_SVH
 
-// ========== Convenience Macros ==========
 // Auto-inject `__FILE__ and `__LINE__ so callers don't need to pass them manually.
-//
-// Usage:
-//   `host_mem_alloc(mem, addr, 1024, 64)
-//   `host_mem_free(mem, addr)
-//   `host_mem_write(mem, addr, wdata)
-//   `host_mem_read(mem, addr, 100, rdata)
-//   `host_mem_set(mem, addr, 8'hAA, 256)
-//   `host_mem_cpy(mem, dst, src, 256)
-//   `host_mem_compare(mem, result, addr1, addr2, 256, mismatch)
-//   `host_mem_release_range(mem, addr, 64)
-//   `host_mem_leak_check(mem)
 
 `define host_mem_alloc(mem, addr, size, align = 1) \
     addr = mem.alloc(size, align, `__FILE__, `__LINE__)

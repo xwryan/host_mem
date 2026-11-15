@@ -25,9 +25,7 @@ class expected_host_mem_pool_error extends uvm_report_catcher;
     endfunction
 endclass
 
-// Focused UVM test for the Host-memory placement foundation.  The test is
-// intentionally independent of any PCIe/DPU topology so it can run while
-// those environments are still under construction.
+// Focused UVM test for Host-memory placement, deliberately independent of PCIe/DPU topology.
 class host_mem_random_test extends uvm_test;
     `uvm_component_utils(host_mem_random_test)
 
@@ -67,9 +65,8 @@ class host_mem_random_test extends uvm_test;
         phase.raise_objection(this);
 
         pool = host_mem_pool::type_id::create("pool");
-        // A complete 2^64-byte aperture cannot be represented by the
-        // allocator's 64-bit size/statistics fields.  The pool must reject
-        // it before publishing a manager whose init_region() failed.
+        // A full 2^64-byte aperture is unrepresentable: the pool must reject it before publishing
+        // a manager whose init_region() failed.
         invalid_region_catcher = expected_host_mem_pool_error::type_id::create(
             "invalid_region_catcher");
         uvm_report_cb::add(null, invalid_region_catcher);
@@ -88,9 +85,8 @@ class host_mem_random_test extends uvm_test;
                               MODE_BUDDY, 16, HOST_MEM_RANDOM))
             `uvm_fatal("HOST_MEM_TEST", "failed to create Host 1")
 
-        // Service environments can receive the owning pool and resolve their
-        // Host-local manager by host_id instead of constructing a private
-        // allocator.
+        // Service environments resolve their Host-local manager from the owning pool by host_id
+        // instead of constructing a private allocator.
         env_cfg = virtio_net_env_config::type_id::create("env_cfg");
         env_cfg.host_id = 0;
         env_cfg.host_mem_pool_binding = pool;
@@ -220,10 +216,8 @@ class host_mem_random_test extends uvm_test;
         h1.free(addr);
         h0_a.free(reserved_base);
 
-        // A 32-TiB buddy aperture produces a level-41 free block while the
-        // request still targets level 0.  The allocator must discover the
-        // available high-level block instead of stopping at an arbitrary
-        // target+40 search limit.
+        // A 32-TiB buddy aperture yields a level-41 free block for a level-0 request; the search
+        // must find it instead of stopping at a target+40 limit.
         huge_buddy = host_mem_manager::type_id::create("huge_buddy");
         huge_buddy.set_alloc_policy(HOST_MEM_FIRST_FIT);
         huge_buddy.init_region(64'h0, 64'h0000_1FFF_FFFF_FFFF,
@@ -234,9 +228,8 @@ class host_mem_random_test extends uvm_test;
                        "buddy allocation failed in >40-level aperture")
         huge_buddy.free(addr);
 
-        // end_addr == 0xffff_ffff_ffff_ffff is a valid inclusive endpoint.
-        // Linear setup must not compute end_addr+1 in a 64-bit temporary and
-        // wrap the whole free segment away.
+        // end_addr == 64'hffff_ffff_ffff_ffff is a valid inclusive endpoint; linear setup must not
+        // wrap end_addr+1 in a 64-bit temporary.
         high_linear = host_mem_manager::type_id::create("high_linear");
         high_linear.set_alloc_policy(HOST_MEM_FIRST_FIT);
         high_linear.init_region(64'hFFFF_FFFF_F000,
@@ -249,9 +242,8 @@ class host_mem_random_test extends uvm_test;
                        "linear allocation failed at 64-bit region end")
         high_linear.free(addr);
 
-        // A reservation may itself end at 2^64 (base + size wraps only in a
-        // 64-bit temporary).  The extended-range validation must accept it
-        // and keep the reserved top page out of the free lists.
+        // A reservation may end exactly at 2^64: extended-range validation must accept it and keep
+        // the reserved top page out of the free lists.
         high_reserved = host_mem_manager::type_id::create("high_reserved");
         high_reserved.set_alloc_policy(HOST_MEM_FIRST_FIT);
         high_reserved.init_region(64'hFFFF_FFFF_E000,

@@ -1,16 +1,11 @@
-// tb/：独立测试入口，依赖预编译 host_mem_pkg 与 UVM；测试自行创建和释放使用的 manager。
-// 通过 import 使用包内唯一类定义，宏通过头文件显式引入，不将测试或局部类纳入生产包。
 `ifndef HOST_MEM_BIGREGION_TB_SV
 `define HOST_MEM_BIGREGION_TB_SV
 
 `include "uvm_macros.svh"
 `include "host_mem_macros.svh"
 
-// Reproduce 32-bit arithmetic overflow in buddy allocator with 4GB region.
-// init_region(0, 0xFFFF_FFFF, MODE_BUDDY, 16) then alloc/write/read/free.
-//
-// Expected failure (before fix): wrong addresses, FATAL, or data corruption
-// due to addr_to_level() truncating longint->int and buddy split overflow.
+// Regression: 4 GB buddy region (granule 16) alloc/write/read/free. Guards against the former
+// 32-bit overflow in addr_to_level() and buddy split (wrong addresses, FATAL, data corruption).
 
 program host_mem_bigregion_tb;
 
@@ -34,7 +29,6 @@ program host_mem_bigregion_tb;
 
         $display("  init done, allocating...");
 
-        // Alloc 1: 256 bytes, align 64
         `host_mem_alloc(mem, addr1, 256, 64);
         if (addr1 == '1) begin
             $display("FAIL: alloc(256,64) returned ~0");
@@ -46,7 +40,6 @@ program host_mem_bigregion_tb;
         assert((addr1 % 64) == 0)
             else $fatal(1, $sformatf("alloc1 alignment fail: addr=0x%016h", addr1));
 
-        // Alloc 2: 128 bytes, align 128
         `host_mem_alloc(mem, addr2, 128, 128);
         if (addr2 == '1) begin
             $display("FAIL: alloc(128,128) returned ~0");
@@ -58,7 +51,6 @@ program host_mem_bigregion_tb;
         assert((addr2 % 128) == 0)
             else $fatal(1, $sformatf("alloc2 alignment fail: addr=0x%016h", addr2));
 
-        // Alloc 3: 512 bytes, align 64
         `host_mem_alloc(mem, addr3, 512, 64);
         if (addr3 == '1) begin
             $display("FAIL: alloc(512,64) returned ~0");
@@ -68,7 +60,6 @@ program host_mem_bigregion_tb;
         assert(addr3 < 64'h1_0000_0000)
             else $fatal(1, $sformatf("alloc3 addr=0x%016h out of 4GB region!", addr3));
 
-        // No overlap check
         assert(addr1 + 256 <= addr2 || addr2 + 128 <= addr1)
             else $fatal(1, "OVERLAP: addr1 and addr2");
         assert(addr1 + 256 <= addr3 || addr3 + 512 <= addr1)
@@ -76,7 +67,6 @@ program host_mem_bigregion_tb;
         assert(addr2 + 128 <= addr3 || addr3 + 512 <= addr2)
             else $fatal(1, "OVERLAP: addr2 and addr3");
 
-        // Write/read roundtrip on addr1
         wdata = new[256];
         foreach (wdata[i]) wdata[i] = byte'(i ^ 8'hA5);
         `host_mem_write(mem, addr1, wdata);
@@ -87,7 +77,6 @@ program host_mem_bigregion_tb;
                     i, wdata[i], rdata[i]));
         $display("  write/read roundtrip addr1 (256B) OK");
 
-        // Write/read roundtrip on addr2
         wdata = new[128];
         foreach (wdata[i]) wdata[i] = byte'(i ^ 8'h5A);
         `host_mem_write(mem, addr2, wdata);
@@ -97,13 +86,11 @@ program host_mem_bigregion_tb;
                 else $fatal(1, $sformatf("addr2 data mismatch at %0d", i));
         $display("  write/read roundtrip addr2 (128B) OK");
 
-        // Free all
         `host_mem_free(mem, addr1);
         `host_mem_free(mem, addr2);
         `host_mem_free(mem, addr3);
         $display("  free all OK");
 
-        // Leak check
         `host_mem_leak_check(mem);
         $display("  leak_check passed");
 

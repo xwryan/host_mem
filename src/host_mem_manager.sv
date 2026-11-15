@@ -1,6 +1,4 @@
-// src/：主机内存分配、数据存储与调试实现，仅由 host_mem_pkg.sv 包内包含。
-// 依赖包内类型、host_mem_api 和 UVM；禁止单独编译或在其他作用域重复 include。
-// manager 拥有自身分配表和数据；调用者或 host_mem_pool 负责实例生命周期。
+// 主机内存 manager：buddy/linear 分配、字节存储与调试输出；仅由 host_mem_pkg.sv 包含。
 `ifndef HOST_MEM_MANAGER_SV
 `define HOST_MEM_MANAGER_SV
 
@@ -8,7 +6,6 @@ class host_mem_manager extends host_mem_api;
 
     `uvm_object_utils(host_mem_manager)
 
-    // ========== Configuration ==========
     byte         poison_pattern = DEFAULT_POISON;
     bit          warn_on_poison_read = 0;
     alloc_mode_e mode = MODE_BUDDY;
@@ -19,49 +16,39 @@ class host_mem_manager extends host_mem_api;
     protected int unsigned min_granule      = DEFAULT_MIN_GRANULE;
     protected int unsigned log2_min_granule = 4;  // log2(16)
 
-    // ========== Buddy Free Lists ==========
-    // free_blocks[level][base_addr] = 1; level 0=64B, 1=128B, ...
+    // free_blocks[level][base_addr]: level L holds free blocks of (min_granule << L) bytes.
     protected bit free_blocks[int][bit[63:0]];
 
-    // ========== Linear Free Segments (sorted ascending by addr) ==========
+    // Linear-mode free segments, sorted ascending by addr.
     protected free_seg_t free_list[$];
 
-    // ========== Allocation Tracking ==========
     protected alloc_info_t alloc_table[bit[63:0]];
 
-    // ========== Address Reverse Lookup ==========
-    // Every 64B-aligned addr -> owning block base
+    // Every min_granule-aligned addr -> owning block base.
     protected bit [63:0] addr_to_block[bit[63:0]];
 
-    // ========== Data Storage ==========
     protected byte block_data[bit[63:0]][];
 
-    // ========== Sub-block Validity ==========
     protected bit sub_block_valid[bit[63:0]][];
 
-    // ========== History ==========
     protected mem_history_t history[$];
 
-    // ========== Statistics ==========
     protected longint unsigned total_size;
     protected longint unsigned allocated_size;
     protected longint unsigned free_size;
     protected int unsigned     alloc_count;
     protected int unsigned     total_alloc_ops;
     protected int unsigned     total_free_ops;
-    // init_region() retains a legacy void return type.  Track whether at
-    // least one region was accepted so ownership layers can avoid publishing
-    // an unusable manager after a rejected initialization.
+    // init_region() keeps a legacy void return; track whether any region was accepted so
+    // ownership layers do not publish an unusable manager.
     protected bit               initialized;
 
-    // ========== Region Tracking ==========
     protected region_info_t regions[$];
 
     // Host-local non-RAM ranges (BAR/MMIO and other reservations).  These are
     // installed before service allocations and removed from free structures.
     protected host_mem_reservation_t reservations[$];
 
-    // ========== Constructor ==========
     function new(string name = "host_mem_manager");
         super.new(name);
         total_size      = 0;
@@ -73,9 +60,6 @@ class host_mem_manager extends host_mem_api;
         initialized     = 0;
     endfunction
 
-    // ---- Method declarations (to be implemented in subsequent tasks) ----
-
-    // Helpers
     extern protected function longint unsigned round_up_pow2(longint unsigned val);
     extern protected function int unsigned log2_floor(longint unsigned val);
     extern protected function int unsigned addr_to_level(longint unsigned size);
@@ -95,7 +79,6 @@ class host_mem_manager extends host_mem_api;
                                                         bit [63:0] end_addr);
     extern protected function void recompute_free_size();
 
-    // Getters
     extern function int unsigned get_min_granule();
     extern function void set_alloc_policy(host_mem_alloc_policy_e policy);
     extern function host_mem_alloc_policy_e get_alloc_policy();
@@ -107,32 +90,26 @@ class host_mem_manager extends host_mem_api;
     extern function bit reserve_range(bit [63:0] base, bit [63:0] size,
                                       string owner = "", string file = "", int line = 0);
 
-    // Init
     extern function void init_region(bit [63:0] base_addr, bit [63:0] end_addr,
                                      alloc_mode_e m = MODE_BUDDY,
                                      int unsigned granule = DEFAULT_MIN_GRANULE,
                                      byte poison = DEFAULT_POISON);
 
-    // Alloc & Free
     extern function bit [63:0] alloc(int unsigned size, int unsigned align = 1, string file = "", int line = 0);
     extern function void free(bit [63:0] addr, string file = "", int line = 0);
     extern function void release_range(bit [63:0] addr, int unsigned size, string file = "", int line = 0);
 
-    // Linear-mode internal helpers
     extern protected function bit [63:0] alloc_linear(int unsigned size, int unsigned align, string file, int line);
     extern protected function void       free_linear(bit [63:0] addr, alloc_info_t info, string file, int line);
     extern protected function void       insert_free_seg_merge(bit [63:0] addr, longint unsigned size);
 
-    // Data Read/Write
     extern function void write_mem(bit [63:0] addr, byte data[], string file = "", int line = 0);
     extern function void read_mem(bit [63:0] addr, int unsigned size, ref byte data[], input string file = "", input int line = 0);
 
-    // Bulk Operations
     extern function void mem_set(bit [63:0] addr, byte value, int unsigned size, string file = "", int line = 0);
     extern function void mem_cpy(bit [63:0] dst_addr, bit [63:0] src_addr, int unsigned size, string file = "", int line = 0);
     extern function bit mem_compare(bit [63:0] addr1, bit [63:0] addr2, int unsigned size, output int unsigned mismatch_offset, input string file = "", input int line = 0);
 
-    // Debug
     extern function void hexdump(bit [63:0] addr, int unsigned size);
     extern function void print_alloc_table();
     extern function void print_stats();
@@ -140,8 +117,6 @@ class host_mem_manager extends host_mem_api;
     extern function void leak_check(string file = "", int line = 0);
 
 endclass
-
-// ========== Helper Function Implementations ==========
 
 function longint unsigned host_mem_manager::round_up_pow2(longint unsigned val);
     longint unsigned result;
@@ -175,10 +150,8 @@ function int unsigned host_mem_manager::get_min_granule();
     return min_granule;
 endfunction
 
-// $urandom_range is commonly implemented with a 32-bit return value.  Linear
-// apertures can expose more than 2^32 aligned candidates, so compose a
-// simulator-seeded 64-bit sample and use rejection sampling to avoid a modulo
-// bias while preserving reproducibility from the simulator seed.
+// $urandom_range is 32-bit, but linear apertures can expose more than 2^32 aligned candidates:
+// compose a seeded 64-bit sample and reject-sample to avoid modulo bias.
 function longint unsigned host_mem_manager::random_bounded(
     longint unsigned upper_exclusive);
     longint unsigned sample;
@@ -363,9 +336,7 @@ function void host_mem_manager::rebuild_free_structures();
 
     free_blocks.delete();
     free_list.delete();
-    // Reservation authoring order must not affect the resulting free list.
-    // Keep metadata in ascending address order for both linear subtraction
-    // and diagnostics.
+    // Keep reservations sorted by base so authoring order cannot change the free list.
     reservations.sort() with (item.base);
     foreach (regions[r]) begin
         if (mode == MODE_LINEAR) begin
@@ -375,10 +346,8 @@ function void host_mem_manager::rebuild_free_structures();
                                     min_granule) * min_granule;
             if (aligned_end_excl_ext <= aligned_base_ext)
                 continue;
-            // A free_seg_t stores a 64-bit base and size.  A usable aperture
-            // whose exclusive end is 2^64 is still representable as long as
-            // its size is less than 2^64; keep arithmetic extended here and
-            // narrow only after the range is known to fit.
+            // free_seg_t holds a 64-bit base/size; an aperture ending exactly at 2^64 still fits, so
+            // keep the arithmetic extended and narrow only once the range is known to fit.
             cursor_ext = aligned_base_ext;
             foreach (reservations[i]) begin
                 reservation_base_ext = {1'b0, reservations[i].base};
@@ -431,9 +400,8 @@ function bit host_mem_manager::reserve_range(
         return 0;
     end
     foreach (reservations[i]) begin
-        // Snapshot/BAR import can be invoked by more than one service
-        // environment.  Re-importing the exact same lease is harmless and
-        // must be idempotent; a different owner still reports an overlap.
+        // Several service environments may import the same snapshot/BAR lease: an identical
+        // re-import is idempotent, while a different owner still reports an overlap.
         if ((reservations[i].base == base) &&
             (reservations[i].size == size) &&
             (reservations[i].owner == owner)) begin
@@ -554,7 +522,6 @@ function void host_mem_manager::init_region(bit [63:0] base_addr, bit [63:0] end
         return;
     end
 
-    // Validate granule: pow2, [1, MAX_MIN_GRANULE]
     if (granule == 0 || granule > MAX_MIN_GRANULE || (granule & (granule - 1)) != 0) begin
         `uvm_error("HOST_MEM", $sformatf(
             "Invalid granule=%0d: must be pow2 in [1, %0d]", granule, MAX_MIN_GRANULE))
@@ -571,10 +538,8 @@ function void host_mem_manager::init_region(bit [63:0] base_addr, bit [63:0] end
     poison_pattern   = poison;
     mode             = m;
     region_size_ext = {1'b0, end_addr} - {1'b0, base_addr} + 65'd1;
-    // Statistics, free-segment sizes, and backing arrays use 64-bit/host
-    // simulator quantities.  A complete 2^64-byte aperture cannot be
-    // represented by those APIs, so reject it explicitly instead of wrapping
-    // to zero and exposing an inconsistent allocator.
+    // Statistics and free-segment sizes are 64-bit, so a full 2^64-byte aperture is
+    // unrepresentable: reject it instead of wrapping to zero.
     if (region_size_ext[64]) begin
         `uvm_error("HOST_MEM", $sformatf(
             "Region [0x%016h - 0x%016h] spans 2^64 bytes, which is not representable",
@@ -594,7 +559,7 @@ function void host_mem_manager::init_region(bit [63:0] base_addr, bit [63:0] end
     regions.push_back(r);
 
     if (m == MODE_LINEAR) begin
-        // Linear mode: align region to min_granule granularity, install as one big free segment
+        // Linear mode: align to min_granule and install the region as one free segment.
         bit [63:0]       aligned_base;
         longint unsigned usable;
 
@@ -632,7 +597,7 @@ function void host_mem_manager::init_region(bit [63:0] base_addr, bit [63:0] end
         return;
     end
 
-    // Buddy mode (original)
+    // Buddy mode
     current_addr = base_addr;
     while (current_addr <= end_addr) begin
         longint unsigned remaining = end_addr - current_addr + 1;
@@ -702,10 +667,8 @@ function bit [63:0] host_mem_manager::alloc(int unsigned size, int unsigned alig
             found = 1;
             break;
         end
-        // A 64-bit aperture with a small granule can legitimately contain
-        // blocks above level 40 (for example a multi-TiB region).  Search the
-        // full representable level range instead of relying on a fixed
-        // target+40 cutoff.
+        // Large 64-bit apertures can hold blocks above level 40: search every representable level
+        // instead of a fixed target+40 cutoff.
         if (search_level >= 63)
             break;
     end
@@ -725,9 +688,8 @@ function bit [63:0] host_mem_manager::alloc(int unsigned size, int unsigned alig
         search_level--;
         buddy = block_addr + (longint'(min_granule) << search_level);
         if (alloc_policy == HOST_MEM_RANDOM && random_bounded(2)) begin
-            // Keep the lower half free and continue allocating from the upper
-            // half.  This preserves buddy alignment while avoiding the
-            // otherwise highly predictable "always descend left" layout.
+            // Keep the lower half free and continue in the upper half: buddy alignment is preserved
+            // without the predictable "always descend left" layout.
             free_blocks[search_level][block_addr] = 1;
             block_addr = buddy;
         end else begin
@@ -1049,7 +1011,6 @@ function void host_mem_manager::hexdump(bit [63:0] addr, int unsigned size);
     block_base = addr_to_block[floor_granule(addr)];
     info = alloc_table[block_base];
 
-    // Bounds check
     offset = addr - block_base;
     if ((offset + size) > info.buddy_size) begin
         `uvm_warning("HOST_MEM", $sformatf(
@@ -1227,8 +1188,6 @@ function void host_mem_manager::leak_check(string file = "", int line = 0);
     `uvm_warning("HOST_MEM", msg)
 endfunction
 
-// ========== Linear Allocator Implementations ==========
-
 function void host_mem_manager::insert_free_seg_merge(bit [63:0] addr, longint unsigned size);
     int insert_idx = -1;
     free_seg_t new_seg;
@@ -1290,15 +1249,13 @@ function bit [63:0] host_mem_manager::alloc_linear(int unsigned size, int unsign
     longint unsigned candidate_count;
     longint unsigned offset_index;
 
-    // Round occupation up to min_granule
     occ_size = ((size + min_granule - 1) / min_granule) * min_granule;
 
     // Enforce minimum alignment so reverse-mapping stays unambiguous
     eff_align = (align < min_granule) ? min_granule : round_up_pow2(align);
 
-    // Gather every eligible segment first.  Random mode chooses both a
-    // segment and an aligned offset within it; FIRST_FIT preserves the legacy
-    // lowest-address behavior.
+    // Collect every eligible segment first: RANDOM picks a segment and an aligned offset in it,
+    // FIRST_FIT keeps the lowest-address choice.
     foreach (free_list[i]) begin
         cand_start_ext = (({1'b0, free_list[i].addr} + eff_align - 1) /
                           eff_align) * eff_align;
@@ -1349,7 +1306,6 @@ function bit [63:0] host_mem_manager::alloc_linear(int unsigned size, int unsign
     if (post_size > 0)
         insert_free_seg_merge(aligned_start + occ_size, post_size);
 
-    // Track allocation
     info.base_addr   = aligned_start;
     info.buddy_size  = occ_size;
     info.req_size    = size;
@@ -1384,7 +1340,6 @@ endfunction
 function void host_mem_manager::free_linear(bit [63:0] addr, alloc_info_t info, string file, int line);
     int unsigned occ_size = info.buddy_size;
 
-    // Poison data
     foreach (block_data[addr][i])
         block_data[addr][i] = poison_pattern;
 
@@ -1393,7 +1348,6 @@ function void host_mem_manager::free_linear(bit [63:0] addr, alloc_info_t info, 
     remove_reverse_mapping(addr, occ_size);
     sub_block_valid.delete(addr);
 
-    // Return to free list + merge neighbors
     insert_free_seg_merge(addr, occ_size);
 
     allocated_size -= occ_size;
