@@ -5,6 +5,7 @@ SystemVerilog/UVM 主机内存模型。两种分配器(Buddy / Linear)、可配�
 ## 文件结构
 
 ```
+host_mem.f              工程 filelist：-f $HOST_MEM_ROOT/host_mem.f
 src/
   host_mem_pkg.sv       唯一编译入口: 常量、typedef、API、manager、pool
   host_mem_macros.svh   调用端便捷宏（独立编译时显式 include）
@@ -18,14 +19,15 @@ docs/                   设计文档
 ## 编译运行
 
 ```bash
-vcs -sverilog -full64 +v2k -ntb_opts uvm-1.2 +incdir+src \
-    src/host_mem_pkg.sv tb/host_mem_tb.sv -o simv -l compile.log
+export HOST_MEM_ROOT=$PWD
+vcs -sverilog -full64 +v2k -ntb_opts uvm-1.2 -f $HOST_MEM_ROOT/host_mem.f \
+    tb/host_mem_tb.sv -o simv -l compile.log
 ./simv
 ```
 
 支持 VCS Q-2020.03+。
 
-生产 filelist 只需 `+incdir+src` 和 `src/host_mem_pkg.sv`，不要单独编译或
+工程编译只加 `-f $HOST_MEM_ROOT/host_mem.f`（`+incdir+src` 与 `src/host_mem_pkg.sv`），不要单独编译或
 再次 include `host_mem_manager.sv` / `host_mem_pool.sv`。调用方在自己的 package、
 module 或 program 中使用 `import host_mem_pkg::*;`，也可使用
 `host_mem_pkg::host_mem_manager` / `host_mem_pkg::host_mem_pool`。
