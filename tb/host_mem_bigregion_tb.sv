@@ -13,7 +13,11 @@ program host_mem_bigregion_tb;
     import host_mem_pkg::*;
 
     host_mem_manager mem;
+    host_mem_manager reserved_mem;
     bit [63:0] addr1, addr2, addr3;
+    bit [63:0] reserved_base[$];
+    bit [63:0] reserved_size[$];
+    bit [63:0] allocated[$];
     byte wdata[], rdata[];
     int unsigned mismatch;
     bit cmp_result;
@@ -101,6 +105,55 @@ program host_mem_bigregion_tb;
         $display("  post-free re-alloc 64KB OK at 0x%016h", addr1);
         `host_mem_free(mem, addr1);
         `host_mem_leak_check(mem);
+
+        // Near-64-bit aperture with hundreds of scattered non-RAM holes (BAR/MSI-X style): rebuilding
+        // the free structures must stay linear in the reservation count, and random allocations must
+        // never touch a hole.
+        $display("\n=== Reserved-hole Test: [4GB, 2^64-256TB) with 512 holes ===");
+        reserved_mem = new("reserved_buddy");
+        reserved_mem.set_alloc_policy(HOST_MEM_RANDOM);
+        reserved_mem.init_region(64'h0000_0001_0000_0000, 64'hfffe_ffff_ffff_ffff, MODE_BUDDY, 16);
+        while (reserved_base.size() < 512) begin
+            bit [63:0] base;
+            bit [63:0] size;
+            bit        clash;
+
+            size = 64'h1000 << ($urandom() % 15);
+            base = ({$urandom(), $urandom()} % (64'hfffe_ffff_ffff_0000 - 64'h0000_0001_0000_0000 - size)) +
+                   64'h0000_0001_0000_0000;
+            base = base & ~(size - 1);
+            clash = (base < 64'h0000_0001_0000_0000);
+            foreach (reserved_base[i])
+                if (base < reserved_base[i] + reserved_size[i] && reserved_base[i] < base + size)
+                    clash = 1;
+            if (clash)
+                continue;
+            if (!reserved_mem.reserve_range(base, size, $sformatf("hole%0d", reserved_base.size())))
+                $fatal(1, $sformatf("reserve_range(0x%016h, 0x%0h) failed", base, size));
+            reserved_base.push_back(base);
+            reserved_size.push_back(size);
+        end
+        foreach (reserved_base[i])
+            assert(reserved_mem.range_reserved(reserved_base[i]) &&
+                   reserved_mem.range_reserved(reserved_base[i] + reserved_size[i] - 1))
+                else $fatal(1, $sformatf("hole %0d not reported as reserved", i));
+        assert(!reserved_mem.range_reserved(64'h0000_0001_0000_0000 - 1))
+            else $fatal(1, "address below the aperture reported as reserved");
+        for (int n = 0; n < 2000; n++) begin
+            int unsigned size;
+
+            size = 64 << ($urandom() % 7);
+            `host_mem_alloc(reserved_mem, addr1, size, 64);
+            assert(addr1 != '1) else $fatal(1, "alloc failed in reserved-hole region");
+            foreach (reserved_base[i])
+                assert(addr1 + size <= reserved_base[i] || reserved_base[i] + reserved_size[i] <= addr1)
+                    else $fatal(1, $sformatf("alloc 0x%016h+%0d overlaps hole %0d", addr1, size, i));
+            allocated.push_back(addr1);
+        end
+        foreach (allocated[i])
+            `host_mem_free(reserved_mem, allocated[i]);
+        `host_mem_leak_check(reserved_mem);
+        $display("  512 holes reserved, 2000 random allocations avoided them, leak_check passed");
 
         $display("\n========================================");
         $display("BIG-REGION TEST PASSED");

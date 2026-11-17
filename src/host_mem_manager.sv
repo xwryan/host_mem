@@ -73,7 +73,6 @@ class host_mem_manager extends host_mem_api;
     extern protected function bit range_overlaps(bit [63:0] a_base, bit [63:0] a_size,
                                                  bit [63:0] b_base, bit [63:0] b_size);
     extern protected function bit range_in_region(bit [63:0] base, bit [63:0] size);
-    extern protected function bit range_reserved(bit [63:0] addr);
     extern protected function void rebuild_free_structures();
     extern protected function void add_buddy_free_range(bit [63:0] base_addr,
                                                         bit [63:0] end_addr);
@@ -87,6 +86,8 @@ class host_mem_manager extends host_mem_api;
     extern function bit is_initialized();
     extern function bit contains_range(bit [63:0] base, bit [63:0] size);
     extern function bit intersects_region(bit [63:0] base, bit [63:0] size);
+    // addr 是否落在某个预留（非 RAM）区间内，供平台/测试核对 BAR、中断页等已从内存中挖掉。
+    extern function bit range_reserved(bit [63:0] addr);
     extern function bit reserve_range(bit [63:0] base, bit [63:0] size,
                                       string owner = "", string file = "", int line = 0);
 
@@ -258,44 +259,45 @@ function bit host_mem_manager::range_reserved(bit [63:0] addr);
     return 0;
 endfunction
 
+// Reservations are sorted by base and disjoint (rebuild_free_structures sorts them, reserve_range
+// rejects overlaps), so one forward sweep finds the next blocker: O(blocks + reservations) per
+// rebuild instead of rescanning every reservation for every emitted block.
 function void host_mem_manager::add_buddy_free_range(
     bit [63:0] base_addr, bit [63:0] end_addr);
     bit [63:0] current_addr;
     bit [63:0] limit_addr;
-    bit [63:0] next_addr;
+    bit [64:0] reservation_end;
     longint unsigned remaining;
     longint unsigned block_size;
     int unsigned level;
-    bit skipped;
+    int unsigned next_reservation;
 
     current_addr = base_addr;
+    next_reservation = 0;
     while (current_addr <= end_addr) begin
-        if (range_reserved(current_addr)) begin
-            skipped = 0;
-            foreach (reservations[i]) begin
-                if ({1'b0, current_addr} >= {1'b0, reservations[i].base} &&
-                    {1'b0, current_addr} < ({1'b0, reservations[i].base} +
-                                             {1'b0, reservations[i].size})) begin
-                    next_addr = ({1'b0, reservations[i].base} +
-                                 {1'b0, reservations[i].size});
-                    current_addr = next_addr;
-                    skipped = 1;
-                    break;
-                end
-            end
-            if (skipped && current_addr == 0)
+        // Drop reservations that end at or before the cursor.
+        while (next_reservation < reservations.size()) begin
+            reservation_end = {1'b0, reservations[next_reservation].base} +
+                              {1'b0, reservations[next_reservation].size};
+            if (reservation_end > {1'b0, current_addr})
                 break;
+            next_reservation++;
+        end
+        if (next_reservation < reservations.size() &&
+            reservations[next_reservation].base <= current_addr) begin
+            // Inside a reservation: resume at its end; an end at 2^64 closes the region.
+            if (reservation_end[64])
+                break;
+            current_addr = reservation_end[63:0];
+            next_reservation++;
             continue;
         end
 
         // Do not choose a buddy block that crosses the next reservation.
         limit_addr = end_addr;
-        foreach (reservations[i]) begin
-            if (reservations[i].base > current_addr &&
-                reservations[i].base <= end_addr &&
-                (reservations[i].base - 1) < limit_addr)
-                limit_addr = reservations[i].base - 1;
-        end
+        if (next_reservation < reservations.size() &&
+            reservations[next_reservation].base <= end_addr)
+            limit_addr = reservations[next_reservation].base - 1;
         remaining = limit_addr - current_addr + 1;
         block_size = min_granule;
         while ((block_size << 1) <= remaining &&

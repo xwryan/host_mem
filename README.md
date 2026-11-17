@@ -64,7 +64,8 @@ assert(pool.get_host(0).reserve_range(64'h1_0000_4000, 64'h1000, "BAR0"));
 
 冻结 DPU snapshot 中完全落入该 aperture 的 BAR 由 Virtio 环境自动导入；位于独立
 MMIO aperture 的 BAR 不占用 Host backing storage，部分相交会拒绝配置。相同 BAR 的
-重复导入是幂等的。
+重复导入是幂等的。`range_reserved(addr)` 查询地址是否落在预留区间内。预留区间按基址
+有序，重建空闲结构是一次线性扫描，几百个预留区间（如多 VF 的 BAR）也不会拖慢 build。
 
 ### 可配置 granule
 
