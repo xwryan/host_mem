@@ -98,6 +98,7 @@ package host_mem_pkg;
     // 按依赖顺序纳入全部生产类，避免调用方 include 产生不同作用域的类身份。
     `include "host_mem_manager.sv"
     `include "host_mem_view.sv"
+    `include "host_mem_owned_view.sv"
     `include "host_mem_pool.sv"
 
     // 宏没有 package 作用域：跨编译单元的调用者仍需显式 include host_mem_macros.svh。

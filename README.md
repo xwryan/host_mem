@@ -11,8 +11,11 @@ src/
   host_mem_macros.svh   调用端便捷宏（独立编译时显式 include）
   host_mem_manager.sv   包内 class: 主机内存管理器
   host_mem_pool.sv      包内 class: 按 host_id 共享 manager 的所有权池
+  host_mem_view.sv      包内 class: 转发给 backing 的视图基类
+  host_mem_owned_view.sv  包内 class: 只认领经本视图分配的地址；多个 env 给同一 Requester 注册 DMA 视图时互不冲突
 tb/
   host_mem_tb.sv        testbench: 23 个测试用例
+  host_mem_owned_view_tb.sv  testbench: owned view 的认领、越界、外来 free 与 free_all
 docs/                   设计文档
 ```
 
