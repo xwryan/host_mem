@@ -5,9 +5,11 @@ SystemVerilog/UVM 主机内存模型。两种分配器(Buddy / Linear)、可配�
 ## 文件结构
 
 ```
-host_mem.f              工程 filelist：-f $HOST_MEM_ROOT/host_mem.f
+host_mem.f              工程 filelist：-F <path>/host_mem/host_mem.f（大写 -F，路径相对该文件）
+host_mem_pkg.sv         根入口：host_mem.f 唯一编译的文件，include src/host_mem_pkg.sv
+host_mem_import.svh     在使用方 package/module 内 `include，等价于 import host_mem_pkg::*;
 src/
-  host_mem_pkg.sv       唯一编译入口: 常量、typedef、API、manager、pool
+  host_mem_pkg.sv       package 本体: 常量、typedef、API、manager、pool
   host_mem_macros.svh   调用端便捷宏（独立编译时显式 include）
   host_mem_manager.sv   包内 class: 主机内存管理器
   host_mem_pool.sv      包内 class: 按 host_id 共享 manager 的所有权池
@@ -23,16 +25,17 @@ docs/                   设计文档
 
 ```bash
 export HOST_MEM_ROOT=$PWD
-vcs -sverilog -full64 +v2k -ntb_opts uvm-1.2 -f $HOST_MEM_ROOT/host_mem.f \
+vcs -sverilog -full64 +v2k -ntb_opts uvm-1.2 -F $HOST_MEM_ROOT/host_mem.f \
     tb/host_mem_tb.sv -o simv -l compile.log
 ./simv
 ```
 
 支持 VCS Q-2020.03+。
 
-工程编译只加 `-f $HOST_MEM_ROOT/host_mem.f`（`+incdir+src` 与 `src/host_mem_pkg.sv`），不要单独编译或
+工程编译只加一行 `-F <path>/host_mem/host_mem.f`（`+incdir+./`、`+incdir+./src` 与根入口 `host_mem_pkg.sv`，
+路径相对该 filelist，可在任意目录编译；本项目无前置依赖），不要用小写 `-f`，也不要单独编译或
 再次 include `host_mem_manager.sv` / `host_mem_pool.sv`。调用方在自己的 package、
-module 或 program 中使用 `import host_mem_pkg::*;`，也可使用
+module 或 program 中写一行 `` `include "host_mem_import.svh" ``（即 `import host_mem_pkg::*;`），也可使用
 `host_mem_pkg::host_mem_manager` / `host_mem_pkg::host_mem_pool`。
 使用便捷宏时显式 include `host_mem_macros.svh`，因为 `import` 不会导入宏。
 测试保持在包外；`host_mem_bigregion_tb.sv` 可替换上述基本测试入口，
